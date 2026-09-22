@@ -70,7 +70,8 @@ enum Command {
     Info { input: PathBuf },
     /// List available codecs
     Codecs,
-    /// Show order-0 entropy: the best any byte-by-byte codec (like huffman) can do
+    /// Show order-0 and order-1 entropy: the limits for byte-by-byte codecs
+    /// without context (huffman, range0) and with one byte of it (range1)
     Entropy {
         /// Files or directories (searched recursively)
         #[arg(required = true)]

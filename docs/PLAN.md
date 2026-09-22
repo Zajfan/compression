@@ -117,7 +117,7 @@ Each phase ends with something that works and a benchmark.
 5. ✅ **Deflate** (LZ77 + Huffman) + gzip: verified both ways against zlib and the real `gzip` tool (`deflate` codec, `cmpr gzip`/`gunzip`)
 
 ### Phase 2 — Modern algorithms
-6. Arithmetic coding / range coder
+6. ✅ Range coder: LZMA-style binary adaptive coder, order-0 and order-1 byte models (`range0`, `range1`); `cmpr entropy` shows order-1 limits
 7. ANS (rANS / tANS) — what zstd uses
 8. LZMA-style: LZ + range coder with context modelling
 9. Burrows–Wheeler transform + MTF (bzip2-style)

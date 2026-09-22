@@ -1,7 +1,7 @@
 //! `cmpr bench`: compression ratio and speed per codec, with round-trip check.
 
 use anyhow::{Context, Result, bail};
-use cmpr_codecs::stats::entropy_bits_per_byte;
+use cmpr_codecs::stats::{entropy_bits_per_byte, order1_entropy_bits_per_byte};
 use cmpr_codecs::{Codec, all_codecs, codec_by_name};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -63,7 +63,8 @@ pub fn run(paths: &[PathBuf], only: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Per-file order-0 entropy and the size it implies.
+/// Per-file order-0 and order-1 entropy, as bits per byte and as the size
+/// they imply.
 pub fn entropy(paths: &[PathBuf]) -> Result<()> {
     let mut files = Vec::new();
     for p in paths {
@@ -71,36 +72,35 @@ pub fn entropy(paths: &[PathBuf]) -> Result<()> {
     }
     files.sort();
     println!(
-        "{:<40} {:>12} {:>8} {:>14} {:>8}",
-        "file", "bytes", "bpb", "ideal bytes", "ratio"
+        "{:<40} {:>12} {:>8} {:>8} {:>8} {:>8}",
+        "file", "bytes", "o0 bpb", "o0 ratio", "o1 bpb", "o1 ratio"
     );
-    let (mut total_in, mut total_ideal) = (0usize, 0f64);
+    let (mut total_in, mut total_o0, mut total_o1) = (0usize, 0f64, 0f64);
     for f in &files {
         let data = std::fs::read(f).with_context(|| format!("reading {}", f.display()))?;
-        let bpb = entropy_bits_per_byte(&data);
-        let ideal = bpb * data.len() as f64 / 8.0;
+        let o0 = entropy_bits_per_byte(&data) * data.len() as f64 / 8.0;
+        let o1 = order1_entropy_bits_per_byte(&data) * data.len() as f64 / 8.0;
         total_in += data.len();
-        total_ideal += ideal;
-        println!(
-            "{:<40} {:>12} {:>8.3} {:>14.0} {:>8}",
-            f.display(),
-            data.len(),
-            bpb,
-            ideal,
-            percent(ideal as usize, data.len())
-        );
+        total_o0 += o0;
+        total_o1 += o1;
+        print_entropy_row(&f.display().to_string(), data.len(), o0, o1);
     }
     if files.len() > 1 {
-        println!(
-            "{:<40} {:>12} {:>8.3} {:>14.0} {:>8}",
-            "total",
-            total_in,
-            bits_per_byte(total_ideal as usize, total_in),
-            total_ideal,
-            percent(total_ideal as usize, total_in)
-        );
+        print_entropy_row("total", total_in, total_o0, total_o1);
     }
     Ok(())
+}
+
+fn print_entropy_row(name: &str, len: usize, o0: f64, o1: f64) {
+    println!(
+        "{:<40} {:>12} {:>8.3} {:>8} {:>8.3} {:>8}",
+        name,
+        len,
+        bits_per_byte(o0 as usize, len),
+        percent(o0 as usize, len),
+        bits_per_byte(o1 as usize, len),
+        percent(o1 as usize, len)
+    );
 }
 
 fn collect_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
