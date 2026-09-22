@@ -1,6 +1,7 @@
 //! `cmpr bench`: compression ratio and speed per codec, with round-trip check.
 
 use anyhow::{Context, Result, bail};
+use cmpr_codecs::stats::entropy_bits_per_byte;
 use cmpr_codecs::{Codec, all_codecs, codec_by_name};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -57,6 +58,46 @@ pub fn run(paths: &[PathBuf], only: &[String]) -> Result<()> {
             bits_per_byte(total_out, total_in),
             mb_per_sec(total_in, comp_time),
             mb_per_sec(total_in, decomp_time),
+        );
+    }
+    Ok(())
+}
+
+/// Per-file order-0 entropy and the size it implies.
+pub fn entropy(paths: &[PathBuf]) -> Result<()> {
+    let mut files = Vec::new();
+    for p in paths {
+        collect_files(p, &mut files).with_context(|| format!("reading {}", p.display()))?;
+    }
+    files.sort();
+    println!(
+        "{:<40} {:>12} {:>8} {:>14} {:>8}",
+        "file", "bytes", "bpb", "ideal bytes", "ratio"
+    );
+    let (mut total_in, mut total_ideal) = (0usize, 0f64);
+    for f in &files {
+        let data = std::fs::read(f).with_context(|| format!("reading {}", f.display()))?;
+        let bpb = entropy_bits_per_byte(&data);
+        let ideal = bpb * data.len() as f64 / 8.0;
+        total_in += data.len();
+        total_ideal += ideal;
+        println!(
+            "{:<40} {:>12} {:>8.3} {:>14.0} {:>8}",
+            f.display(),
+            data.len(),
+            bpb,
+            ideal,
+            percent(ideal as usize, data.len())
+        );
+    }
+    if files.len() > 1 {
+        println!(
+            "{:<40} {:>12} {:>8.3} {:>14.0} {:>8}",
+            "total",
+            total_in,
+            bits_per_byte(total_ideal as usize, total_in),
+            total_ideal,
+            percent(total_ideal as usize, total_in)
         );
     }
     Ok(())

@@ -112,7 +112,7 @@ Each phase ends with something that works and a benchmark.
 ### Phase 1 — Classic algorithms from scratch
 1. ✅ Bit reader/writer (LSB-first, Elias gamma codes)
 2. ✅ Run-length encoding: `packbits` (byte-oriented) and `rle` (bit-level, gamma lengths)
-3. Huffman coding
+3. ✅ Huffman coding: canonical, length-limited, table-driven decoder (`huffman` codec, `cmpr entropy`)
 4. LZ77 / LZSS with hash-chain match finder
 5. **Deflate** (LZ77 + Huffman) — verify our output decodes with zlib, and we decode real .gz/.zip files
 

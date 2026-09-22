@@ -185,6 +185,36 @@ impl<'a> BitReader<'a> {
         Ok(1u64 << extra | rest)
     }
 
+    /// Look at the next `n` bits (`n` ≤ 32) without consuming them.
+    ///
+    /// Near the end of the input, missing bits read as zero. That lets a
+    /// table-driven decoder always peek its full table width; [`consume`]
+    /// still fails if it asks for bits that do not exist.
+    ///
+    /// [`consume`]: Self::consume
+    pub fn peek_bits(&mut self, n: u32) -> u32 {
+        debug_assert!(n <= 32);
+        while self.nbits < n {
+            let Some(&byte) = self.data.get(self.pos) else {
+                break;
+            };
+            self.acc |= u64::from(byte) << self.nbits;
+            self.pos += 1;
+            self.nbits += 8;
+        }
+        (self.acc & ((1u64 << n) - 1)) as u32
+    }
+
+    /// Drop `n` bits previously examined with [`peek_bits`](Self::peek_bits).
+    pub fn consume(&mut self, n: u32) -> Result<()> {
+        if n > self.nbits {
+            return Err(Error::UnexpectedEof);
+        }
+        self.acc >>= n;
+        self.nbits -= n;
+        Ok(())
+    }
+
     /// Skip to the next byte boundary, discarding the padding bits.
     pub fn align_to_byte(&mut self) {
         let drop = self.nbits % 8;
@@ -267,6 +297,16 @@ mod tests {
         r.align_to_byte();
         assert_eq!(r.read_byte(), Ok(0x42));
         assert_eq!(r.bits_remaining(), 0);
+    }
+
+    #[test]
+    fn peek_and_consume() {
+        let mut r = BitReader::new(&[0b1010_1100]);
+        assert_eq!(r.peek_bits(4), 0b1100);
+        assert_eq!(r.peek_bits(12), 0b1010_1100, "missing bits read as zero");
+        assert_eq!(r.consume(4), Ok(()));
+        assert_eq!(r.read_bits(4), Ok(0b1010));
+        assert_eq!(r.consume(1), Err(Error::UnexpectedEof));
     }
 
     #[derive(Debug, Clone)]

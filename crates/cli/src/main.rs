@@ -47,6 +47,12 @@ enum Command {
     Info { input: PathBuf },
     /// List available codecs
     Codecs,
+    /// Show order-0 entropy: the best any byte-by-byte codec (like huffman) can do
+    Entropy {
+        /// Files or directories (searched recursively)
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
     /// Measure ratio and speed of codecs on files or directories
     Bench {
         /// Files or directories (searched recursively)
@@ -126,6 +132,7 @@ fn main() -> Result<()> {
                 println!("{:<3} {:<12} {}", c.id(), c.name(), c.description());
             }
         }
+        Command::Entropy { paths } => bench::entropy(&paths)?,
         Command::Bench { paths, codec } => bench::run(&paths, &codec)?,
     }
     Ok(())
