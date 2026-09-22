@@ -4,6 +4,7 @@
 //! automatically puts it under the shared round-trip tests, the benchmarks and
 //! the CLI.
 
+pub mod bits;
 pub mod codecs;
 pub mod crc32;
 pub mod error;
@@ -35,7 +36,11 @@ pub trait Codec: Send + Sync {
 
 /// Every codec this crate provides, in id order.
 pub fn all_codecs() -> Vec<Box<dyn Codec>> {
-    vec![Box::new(codecs::Store)]
+    vec![
+        Box::new(codecs::Store),
+        Box::new(codecs::PackBits),
+        Box::new(codecs::Rle),
+    ]
 }
 
 /// Look up a codec by its command-line name.

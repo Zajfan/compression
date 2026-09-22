@@ -2,7 +2,7 @@
 
 An open-source, cross-platform file archiver built from scratch in Rust. The goals are to learn how compression works, and to push compression ratio by using a specialised method for each file type.
 
-Status: **Phase 0: foundation**. See [docs/PLAN.md](docs/PLAN.md) for the tech stack, architecture and roadmap.
+Status: **Phase 1: classic algorithms** (bit I/O and RLE done). See [docs/PLAN.md](docs/PLAN.md) for the tech stack, architecture and roadmap.
 
 > `cmpr` is a placeholder name until the project gets a real one.
 
