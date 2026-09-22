@@ -4,6 +4,7 @@
 //! automatically puts it under the shared round-trip tests, the benchmarks and
 //! the CLI.
 
+pub mod ans;
 pub mod bits;
 pub mod codecs;
 pub mod crc32;
@@ -51,6 +52,7 @@ pub fn all_codecs() -> Vec<Box<dyn Codec>> {
         Box::new(codecs::Deflate),
         Box::new(codecs::Range0),
         Box::new(codecs::Range1),
+        Box::new(codecs::Rans),
     ]
 }
 

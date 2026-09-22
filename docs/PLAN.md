@@ -118,7 +118,7 @@ Each phase ends with something that works and a benchmark.
 
 ### Phase 2 — Modern algorithms
 6. ✅ Range coder: LZMA-style binary adaptive coder, order-0 and order-1 byte models (`range0`, `range1`); `cmpr entropy` shows order-1 limits
-7. ANS (rANS / tANS) — what zstd uses
+7. ✅ rANS: static order-0, 4 interleaved states, branchless 16-bit renormalization, 32K blocks (`rans`). tANS/FSE variant later if LZ needs it
 8. LZMA-style: LZ + range coder with context modelling
 9. Burrows–Wheeler transform + MTF (bzip2-style)
 10. Optimal parsing (smarter match selection)
