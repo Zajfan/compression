@@ -43,6 +43,29 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
+    /// Compress a file to standard .gz format (readable by gzip, 7-Zip, ...)
+    Gzip {
+        input: PathBuf,
+        /// Output path [default: <input>.gz]
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Compression level, 0 (store) to 9 (smallest)
+        #[arg(short, long, default_value_t = 6, value_parser = clap::value_parser!(u8).range(0..=9))]
+        level: u8,
+        /// Overwrite the output if it exists
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Decompress a .gz file (made by any gzip tool)
+    Gunzip {
+        input: PathBuf,
+        /// Output path [default: <input> without .gz]
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Overwrite the output if it exists
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Show the header of a .cmpr file
     Info { input: PathBuf },
     /// List available codecs
@@ -74,12 +97,7 @@ fn main() -> Result<()> {
         } => {
             let codec = codec_by_name(&codec)
                 .with_context(|| format!("unknown codec '{codec}' (see `cmpr codecs`)"))?;
-            let output = output.unwrap_or_else(|| {
-                let mut name = input.clone().into_os_string();
-                name.push(".");
-                name.push(EXTENSION);
-                name.into()
-            });
+            let output = output.unwrap_or_else(|| with_added_extension(&input, EXTENSION));
             let data = read(&input)?;
             let packed = frame::encode(codec.as_ref(), &data);
             write(&output, &packed, force)?;
@@ -115,6 +133,46 @@ fn main() -> Result<()> {
                 data.len()
             );
         }
+        Command::Gzip {
+            input,
+            output,
+            level,
+            force,
+        } => {
+            let output = output.unwrap_or_else(|| with_added_extension(&input, "gz"));
+            let data = read(&input)?;
+            let packed = cmpr_codecs::gzip::compress(&data, level);
+            write(&output, &packed, force)?;
+            println!(
+                "{} -> {}: {} -> {} bytes ({})",
+                input.display(),
+                output.display(),
+                data.len(),
+                packed.len(),
+                bench::percent(packed.len(), data.len())
+            );
+        }
+        Command::Gunzip {
+            input,
+            output,
+            force,
+        } => {
+            let output = match output {
+                Some(o) => o,
+                None if input.extension().is_some_and(|e| e == "gz") => input.with_extension(""),
+                None => bail!("input has no .gz extension; pass --output"),
+            };
+            let packed = read(&input)?;
+            let data = cmpr_codecs::gzip::decompress(&packed, usize::MAX)
+                .with_context(|| format!("decoding {}", input.display()))?;
+            write(&output, &data, force)?;
+            println!(
+                "{} -> {}: {} bytes",
+                input.display(),
+                output.display(),
+                data.len()
+            );
+        }
         Command::Info { input } => {
             let packed = read(&input)?;
             let header = frame::read_header(&packed)?;
@@ -136,6 +194,14 @@ fn main() -> Result<()> {
         Command::Bench { paths, codec } => bench::run(&paths, &codec)?,
     }
     Ok(())
+}
+
+/// `file.txt` -> `file.txt.<ext>`
+fn with_added_extension(path: &Path, ext: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".");
+    name.push(ext);
+    name.into()
 }
 
 fn read(path: &Path) -> Result<Vec<u8>> {

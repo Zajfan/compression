@@ -222,6 +222,12 @@ impl<'a> BitReader<'a> {
         self.nbits -= drop;
     }
 
+    /// Bytes fully consumed so far. Call after [`align_to_byte`](Self::align_to_byte)
+    /// to find where the bit stream ended inside the input.
+    pub fn byte_position(&self) -> usize {
+        self.pos - (self.nbits / 8) as usize
+    }
+
     /// Bits not yet read, including padding in the final byte.
     pub fn bits_remaining(&self) -> u64 {
         (self.data.len() - self.pos) as u64 * 8 + u64::from(self.nbits)

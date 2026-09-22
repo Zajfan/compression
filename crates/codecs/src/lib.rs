@@ -7,9 +7,12 @@
 pub mod bits;
 pub mod codecs;
 pub mod crc32;
+pub mod deflate;
 pub mod error;
 pub mod frame;
+pub mod gzip;
 pub mod huffman;
+pub mod lz77;
 pub mod stats;
 
 pub use error::{Error, Result};
@@ -43,6 +46,8 @@ pub fn all_codecs() -> Vec<Box<dyn Codec>> {
         Box::new(codecs::PackBits),
         Box::new(codecs::Rle),
         Box::new(codecs::Huffman),
+        Box::new(codecs::Lzss),
+        Box::new(codecs::Deflate),
     ]
 }
 

@@ -49,3 +49,16 @@ jobs:
             cmp Cargo.lock sample.out
           done
           $BIN bench crates
+      - name: gzip interop
+        shell: bash
+        run: |
+          BIN=target/release/cmpr
+          for f in Cargo.lock README.md docs/PLAN.md; do
+            # ours -> real gzip
+            $BIN gzip -f -o t.gz "$f"
+            gzip -dc t.gz | cmp - "$f"
+            # real gzip -> ours
+            gzip -9c "$f" > ref.gz
+            $BIN gunzip -f -o t.out ref.gz
+            cmp t.out "$f"
+          done

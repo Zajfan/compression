@@ -2,7 +2,7 @@
 
 An open-source, cross-platform file archiver built from scratch in Rust. The goals are to learn how compression works, and to push compression ratio by using a specialised method for each file type.
 
-Status: **Phase 1: classic algorithms** (bit I/O, RLE and Huffman done). See [docs/PLAN.md](docs/PLAN.md) for the tech stack, architecture and roadmap.
+Status: **Phase 1 done**: RLE, Huffman, LZ77 and a zlib-compatible Deflate/gzip, all from scratch. Next: Phase 2, modern algorithms. See [docs/PLAN.md](docs/PLAN.md) for the tech stack, architecture and roadmap.
 
 > `cmpr` is a placeholder name until the project gets a real one.
 
@@ -24,6 +24,9 @@ cargo test                                   # run all tests
 cargo run -p cmpr-cli -- codecs              # list codecs
 cargo run -p cmpr-cli -- compress README.md  # -> README.md.cmpr
 cargo run -p cmpr-cli -- decompress README.md.cmpr -o README.copy.md
+cargo run -p cmpr-cli -- compress -c deflate README.md -f   # pick a codec
+cargo run -p cmpr-cli -- gzip README.md                   # real .gz, opens anywhere
+cargo run -p cmpr-cli -- entropy README.md                # theoretical order-0 limit
 ```
 
 ## Benchmarks

@@ -15,6 +15,7 @@ cmpr-testkit = { path = "crates/testkit" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 criterion = "0.5"
+flate2 = "1"
 proptest = "1"
 
 [workspace.lints.rust]

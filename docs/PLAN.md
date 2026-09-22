@@ -109,12 +109,12 @@ Each phase ends with something that works and a benchmark.
 ### Phase 0 — Foundation ✅
 - Cargo workspace, CLI skeleton, CI on 3 OSes, round-trip test harness, benchmark harness with corpora.
 
-### Phase 1 — Classic algorithms from scratch
+### Phase 1 — Classic algorithms from scratch ✅
 1. ✅ Bit reader/writer (LSB-first, Elias gamma codes)
 2. ✅ Run-length encoding: `packbits` (byte-oriented) and `rle` (bit-level, gamma lengths)
 3. ✅ Huffman coding: canonical, length-limited, table-driven decoder (`huffman` codec, `cmpr entropy`)
-4. LZ77 / LZSS with hash-chain match finder
-5. **Deflate** (LZ77 + Huffman) — verify our output decodes with zlib, and we decode real .gz/.zip files
+4. ✅ LZ77 / LZSS with hash-chain match finder and lazy matching (`lzss` codec)
+5. ✅ **Deflate** (LZ77 + Huffman) + gzip: verified both ways against zlib and the real `gzip` tool (`deflate` codec, `cmpr gzip`/`gunzip`)
 
 ### Phase 2 — Modern algorithms
 6. Arithmetic coding / range coder
