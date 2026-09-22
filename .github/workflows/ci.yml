@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+      - name: Benchmarks compile
+        run: cargo bench --workspace --no-run
+      - name: CLI round-trip
+        shell: bash
+        run: |
+          cargo build --release -p cmpr-cli
+          BIN=target/release/cmpr
+          $BIN codecs
+          for codec in $($BIN codecs | awk '{print $2}'); do
+            $BIN compress -c "$codec" -o sample.cmpr Cargo.lock -f
+            $BIN decompress -o sample.out sample.cmpr -f
+            cmp Cargo.lock sample.out
+          done
+          $BIN bench crates

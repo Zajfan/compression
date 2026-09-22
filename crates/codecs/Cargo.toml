@@ -1,0 +1,20 @@
+[package]
+name = "cmpr-codecs"
+description = "Compression algorithms implemented from scratch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+cmpr-testkit.workspace = true
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "codecs"
+harness = false
+
+[lints]
+workspace = true

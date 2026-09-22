@@ -1,0 +1,16 @@
+[package]
+name = "cmpr-testkit"
+description = "Round-trip test harness shared by every codec"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cmpr-codecs.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

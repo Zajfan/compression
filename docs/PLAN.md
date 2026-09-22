@@ -80,7 +80,7 @@ Alternatives considered: **C++** (fastest ecosystem, but unsafe parsing and pain
 
 | Format | Read | Write | How |
 |---|---|---|---|
-| Our own format (working name `.arc` → rename later) | ✅ | ✅ | Built by us, the "best ratio" format |
+| Our own format (working name `.cmpr` → rename later) | ✅ | ✅ | Built by us, the "best ratio" format |
 | ZIP | ✅ | ✅ | Library first, own Deflate later |
 | TAR, .tar.gz/.bz2/.xz/.zst | ✅ | ✅ | Libraries |
 | GZ, BZ2, XZ, ZST, LZ4, Brotli | ✅ | ✅ | Libraries |
@@ -156,7 +156,7 @@ Each phase ends with something that works and a benchmark.
 
 | Decision | Recommendation | Status |
 |---|---|---|
-| Licence | **MIT OR Apache-2.0** (Rust ecosystem standard, max reuse) — or **GPL-3.0** if you want forks to stay open | Needs your call |
-| Project / format name | TBD | Needs your call |
+| Licence | **MIT** | ✅ Decided |
+| Project / format name | TBD (placeholder: `cmpr`, `.cmpr`) | Needs your call |
 | GUI toolkit | Tauri 2 (web UI) vs Slint (native Rust UI) | Decide at Phase 5, CLI first |
 | Frontend framework (if Tauri) | Svelte | Decide at Phase 5 |
