@@ -1,20 +1,38 @@
-//! Match finder for LZMA: hash chains over a window of up to 4 GB.
+//! Match finders for LZMA, over a window of up to 4 GB.
 //!
 //! Like [`crate::lz77`]'s finder, but tuned for LZMA:
 //!
 //! - Matches can be as short as 2 bytes (worth it at small distances, since
 //!   LZMA codes them cheaply), so the most recent position of each 2-byte
 //!   and 3-byte string is kept in its own small table.
-//! - Longer matches are found by walking a chain of earlier positions
-//!   whose next 4 bytes hash the same.
 //! - Every improvement found along the way is reported, not just the best,
 //!   so the encoder can prefer a slightly shorter match that is much closer.
+//!
+//! Longer matches come from the positions whose next 4 bytes hash the same,
+//! organised in one of two ways ([`Kind`]):
+//!
+//! **Hash chains** link each position to the previous one in its bucket.
+//! Adding a position is O(1), but a search visits candidates newest first
+//! whatever they contain, so on text with many similar strings it spends
+//! most of its budget on poor candidates.
+//!
+//! **Binary trees** (the LZMA SDK's BT4) keep each bucket as a search tree
+//! ordered by the bytes *following* each position, like a dictionary.
+//! Searching walks down the tree towards the current string: every step
+//! either extends the best match or rules out a whole subtree, so the
+//! budget goes to the most similar strings. The price is that every
+//! position, even one skipped by the parser, must be inserted with a walk.
+//! Insertion makes the new position the root: the walk splits the old
+//! tree into the part that sorts before it (its left subtree) and after it
+//! (its right subtree).
 
 /// Longest match LZMA can code.
 pub const MAX_LEN: usize = super::MATCH_MAX_LEN;
 
 /// No position (positions are stored +1).
 const NONE: u32 = 0;
+
+const HASH3_BITS: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Match {
@@ -23,11 +41,19 @@ pub struct Match {
     pub dist: u32,
 }
 
+/// How positions with the same 4-byte hash are organised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    HashChain,
+    BinaryTree,
+}
+
 pub struct MatchFinder<'a> {
     data: &'a [u8],
+    kind: Kind,
     /// Largest distance allowed (the dictionary size).
     window: usize,
-    /// Chain links to follow per search.
+    /// Candidates to visit per search.
     depth: usize,
     /// Stop searching once a match this long is found.
     nice_len: usize,
@@ -36,27 +62,32 @@ pub struct MatchFinder<'a> {
     head2: Vec<u32>,
     /// Latest position of each hashed 3-byte string.
     head3: Vec<u32>,
-    /// Latest position of each hashed 4-byte string: the chain start.
+    /// Latest position of each hashed 4-byte string: the chain start or
+    /// tree root.
     head4: Vec<u32>,
-    /// Previous position with the same 4-byte hash, at `pos % chain.len()`.
-    chain: Vec<u32>,
+    /// Positions kept, as a ring: position `p` lives at `p % cyc`.
+    cyc: usize,
+    /// Hash chains: the previous position in the bucket, one per slot.
+    /// Binary trees: the left and right child, two per slot.
+    links: Vec<u32>,
     /// Positions below this are in the tables.
     indexed: usize,
 }
 
-const HASH3_BITS: u32 = 16;
-
 impl<'a> MatchFinder<'a> {
-    pub fn new(data: &'a [u8], window: usize, depth: usize, nice_len: usize) -> Self {
+    pub fn new(data: &'a [u8], kind: Kind, window: usize, depth: usize, nice_len: usize) -> Self {
         assert!(
             data.len() < u32::MAX as usize,
             "input too large for 32-bit positions"
         );
         // Big enough for the input, no bigger: small inputs stay cheap.
         let hash4_bits = (usize::BITS - data.len().leading_zeros()).clamp(10, 20);
-        let chain_len = window.min(data.len()).max(1);
+        // Distances up to `window` must fit in the ring.
+        let cyc = window.min(data.len()) + 1;
+        let per_slot = if kind == Kind::BinaryTree { 2 } else { 1 };
         Self {
             data,
+            kind,
             window,
             depth,
             nice_len: nice_len.min(MAX_LEN),
@@ -64,7 +95,8 @@ impl<'a> MatchFinder<'a> {
             head2: vec![NONE; 1 << 16],
             head3: vec![NONE; 1 << HASH3_BITS],
             head4: vec![NONE; 1 << hash4_bits],
-            chain: vec![NONE; chain_len],
+            cyc,
+            links: vec![NONE; cyc * per_slot],
             indexed: 0,
         }
     }
@@ -86,81 +118,220 @@ impl<'a> MatchFinder<'a> {
 
     /// Add every position before `end` to the tables.
     fn index_until(&mut self, end: usize) {
-        let n = self.data.len();
         while self.indexed < end {
             let pos = self.indexed;
-            let tag = pos as u32 + 1;
-            if pos + 4 <= n {
-                let h = self.key4(pos);
-                let slot = pos % self.chain.len();
-                self.chain[slot] = self.head4[h];
-                self.head4[h] = tag;
+            match self.kind {
+                Kind::HashChain => self.chain_insert(pos),
+                Kind::BinaryTree => {
+                    let root = self.take_root(pos);
+                    let limit = self.tree_limit(pos);
+                    self.tree_walk(pos, root, limit, 0, None);
+                }
             }
-            if pos + 3 <= n {
-                let h = self.key3(pos);
-                self.head3[h] = tag;
-            }
-            if pos + 2 <= n {
-                let h = self.key2(pos);
-                self.head2[h] = tag;
-            }
+            self.update_short_heads(pos);
             self.indexed += 1;
         }
     }
 
-    /// Matches for `pos` in order of increasing length, written to `out`
-    /// (cleared first). Each is the closest match found of its length.
-    pub fn find(&mut self, pos: usize, out: &mut Vec<Match>) {
-        out.clear();
-        self.index_until(pos);
-        let data = self.data;
-        let max_len = MAX_LEN.min(data.len() - pos);
-        if max_len < 2 {
-            return;
+    fn update_short_heads(&mut self, pos: usize) {
+        let n = self.data.len();
+        let tag = pos as u32 + 1;
+        if pos + 3 <= n {
+            let h = self.key3(pos);
+            self.head3[h] = tag;
         }
-        let mut best = 1;
-        let consider = |candidate: u32, best: &mut usize, out: &mut Vec<Match>| -> bool {
+        if pos + 2 <= n {
+            let h = self.key2(pos);
+            self.head2[h] = tag;
+        }
+    }
+
+    fn chain_insert(&mut self, pos: usize) {
+        if pos + 4 <= self.data.len() {
+            let h = self.key4(pos);
+            self.links[pos % self.cyc] = self.head4[h];
+            self.head4[h] = pos as u32 + 1;
+        }
+    }
+
+    /// Make `pos` the root of its tree and return the old root, or `NONE`
+    /// if `pos` is too close to the end to go in a tree.
+    fn take_root(&mut self, pos: usize) -> u32 {
+        if pos + 4 > self.data.len() {
+            return NONE;
+        }
+        let h = self.key4(pos);
+        std::mem::replace(&mut self.head4[h], pos as u32 + 1)
+    }
+
+    /// How far tree comparisons go at `pos`.
+    fn tree_limit(&self, pos: usize) -> usize {
+        self.nice_len.min(self.data.len() - pos)
+    }
+
+    /// Walk the tree under `root` towards the string at `pos`, rebuilding
+    /// it with `pos` as the root. Matches longer than `best` go to `out`.
+    /// Returns the longest length seen.
+    fn tree_walk(
+        &mut self,
+        pos: usize,
+        mut candidate: u32,
+        limit: usize,
+        mut best: usize,
+        mut out: Option<&mut Vec<Match>>,
+    ) -> usize {
+        if pos + 4 > self.data.len() {
+            return best;
+        }
+        let data = self.data;
+        let slot = 2 * (pos % self.cyc);
+        // Where to hang the next candidate that sorts after / before `pos`.
+        // They start as `pos`'s own right and left child.
+        let (mut after_link, mut before_link) = (slot + 1, slot);
+        // Bytes known to agree with `pos` for everything reachable through
+        // each side, so comparisons can start there.
+        let (mut after_len, mut before_len) = (0, 0);
+        for _ in 0..self.depth {
+            if candidate == NONE {
+                break;
+            }
             let c = candidate as usize - 1;
             let dist = pos - c;
             if dist > self.window {
-                return false;
+                break;
             }
-            if *best < max_len && data[c + *best] == data[pos + *best] {
+            let pair = 2 * (c % self.cyc);
+            let mut len = after_len.min(before_len);
+            if data[c + len] == data[pos + len] {
+                len += 1 + match_len(data, c + len + 1, pos + len + 1, limit - len - 1);
+                if len > best {
+                    best = len;
+                    if let Some(out) = out.as_deref_mut() {
+                        out.push(Match {
+                            len: len as u32,
+                            dist: dist as u32,
+                        });
+                    }
+                }
+                if len == limit {
+                    // Identical as far as we compare: `pos` takes over the
+                    // candidate's subtrees, and the candidate drops out.
+                    self.links[before_link] = self.links[pair];
+                    self.links[after_link] = self.links[pair + 1];
+                    return best;
+                }
+            }
+            if data[c + len] < data[pos + len] {
+                // The candidate sorts before `pos`: it and its left subtree
+                // go left; continue into its right subtree.
+                self.links[before_link] = candidate;
+                before_link = pair + 1;
+                candidate = self.links[before_link];
+                before_len = len;
+            } else {
+                self.links[after_link] = candidate;
+                after_link = pair;
+                candidate = self.links[after_link];
+                after_len = len;
+            }
+        }
+        // Out of budget or candidates: cut the rest off.
+        self.links[after_link] = NONE;
+        self.links[before_link] = NONE;
+        best
+    }
+
+    /// Matches for `pos` in order of increasing length, written to `out`
+    /// (cleared first). Each is the closest match found of its length.
+    ///
+    /// Each position may be searched at most once, in increasing order;
+    /// positions skipped over are indexed without searching.
+    pub fn find(&mut self, pos: usize, out: &mut Vec<Match>) {
+        out.clear();
+        debug_assert!(pos >= self.indexed, "position {pos} searched twice");
+        self.index_until(pos);
+        let data = self.data;
+        let max_len = MAX_LEN.min(data.len() - pos);
+        let mut best = 1;
+        if max_len >= 2 {
+            let short = [
+                self.head2[self.key2(pos)],
+                if max_len >= 3 {
+                    self.head3[self.key3(pos)]
+                } else {
+                    NONE
+                },
+            ];
+            for (i, &c) in short.iter().enumerate() {
+                if c == NONE || (i == 1 && c == short[0]) {
+                    continue;
+                }
+                let c = c as usize - 1;
+                let dist = pos - c;
+                if dist <= self.window && data[c + best] == data[pos + best] {
+                    let len = match_len(data, c, pos, max_len);
+                    if len > best {
+                        best = len;
+                        out.push(Match {
+                            len: len as u32,
+                            dist: dist as u32,
+                        });
+                    }
+                }
+            }
+        }
+        match self.kind {
+            Kind::HashChain => {
+                self.chain_search(pos, max_len, best, out);
+                self.chain_insert(pos);
+            }
+            Kind::BinaryTree => {
+                let root = self.take_root(pos);
+                let limit = self.tree_limit(pos);
+                // The tree must take `pos` even when a short match already
+                // reaches the limit; it just records nothing then.
+                let record = (best < limit).then_some(&mut *out);
+                self.tree_walk(pos, root, limit, best, record);
+                // Comparisons stop at nice_len; extend the longest match
+                // to its full length.
+                if let Some(last) = out.last_mut() {
+                    if last.len as usize == limit && limit < max_len {
+                        let d = last.dist as usize;
+                        last.len = match_len(data, pos - d, pos, max_len) as u32;
+                    }
+                }
+            }
+        }
+        self.update_short_heads(pos);
+        self.indexed = pos + 1;
+    }
+
+    fn chain_search(&self, pos: usize, max_len: usize, mut best: usize, out: &mut Vec<Match>) {
+        if max_len < 4 || best >= self.nice_len {
+            return;
+        }
+        let data = self.data;
+        let mut candidate = self.head4[self.key4(pos)];
+        for _ in 0..self.depth {
+            if candidate == NONE || best >= self.nice_len || best == max_len {
+                break;
+            }
+            let c = candidate as usize - 1;
+            let dist = pos - c;
+            if dist > self.window {
+                break;
+            }
+            if data[c + best] == data[pos + best] {
                 let len = match_len(data, c, pos, max_len);
-                if len > *best {
-                    *best = len;
+                if len > best {
+                    best = len;
                     out.push(Match {
                         len: len as u32,
                         dist: dist as u32,
                     });
                 }
             }
-            true
-        };
-
-        let c2 = self.head2[self.key2(pos)];
-        if c2 != NONE {
-            consider(c2, &mut best, out);
-        }
-        if max_len >= 3 {
-            let c3 = self.head3[self.key3(pos)];
-            if c3 != NONE && c3 != c2 {
-                consider(c3, &mut best, out);
-            }
-        }
-        if max_len < 4 || best >= self.nice_len {
-            return;
-        }
-        let mut candidate = self.head4[self.key4(pos)];
-        for _ in 0..self.depth {
-            if candidate == NONE || best >= self.nice_len || best == max_len {
-                break;
-            }
-            if !consider(candidate, &mut best, out) {
-                break;
-            }
-            let c = candidate as usize - 1;
-            let next = self.chain[c % self.chain.len()];
+            let next = self.links[c % self.cyc];
             if next >= candidate {
                 break; // link overwritten by a newer position
             }
@@ -202,6 +373,8 @@ fn match_len(data: &[u8], a: usize, b: usize, limit: usize) -> usize {
 mod tests {
     use super::*;
 
+    const KINDS: [Kind; 2] = [Kind::HashChain, Kind::BinaryTree];
+
     #[test]
     fn match_len_counts_agreeing_bytes() {
         let data = b"abcdefghijklmnopabcdefghijklmnoXabc";
@@ -214,10 +387,16 @@ mod tests {
     fn finds_increasing_matches_and_prefers_close_ones() {
         // "ab" close by, "abcdef" further back.
         let data = b"abcdef.......xab..abcdefgh";
-        let mut mf = MatchFinder::new(data, 1 << 20, 16, 273);
-        let mut out = Vec::new();
-        mf.find(18, &mut out);
-        assert_eq!(out, [Match { len: 2, dist: 4 }, Match { len: 6, dist: 18 }]);
+        for kind in KINDS {
+            let mut mf = MatchFinder::new(data, kind, 1 << 20, 16, 273);
+            let mut out = Vec::new();
+            mf.find(18, &mut out);
+            assert_eq!(
+                out,
+                [Match { len: 2, dist: 4 }, Match { len: 6, dist: 18 }],
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
@@ -225,10 +404,56 @@ mod tests {
         let mut data = b"0123456789".to_vec();
         data.extend(std::iter::repeat_n(b'-', 100));
         data.extend(b"0123456789");
-        let mut out = Vec::new();
-        MatchFinder::new(&data, 64, 16, 273).find(110, &mut out);
-        assert!(out.is_empty(), "{out:?}");
-        MatchFinder::new(&data, 128, 16, 273).find(110, &mut out);
-        assert_eq!(out.last(), Some(&Match { len: 10, dist: 110 }));
+        for kind in KINDS {
+            let mut out = Vec::new();
+            MatchFinder::new(&data, kind, 64, 16, 273).find(110, &mut out);
+            assert!(out.is_empty(), "{kind:?} {out:?}");
+            MatchFinder::new(&data, kind, 128, 16, 273).find(110, &mut out);
+            assert_eq!(out.last(), Some(&Match { len: 10, dist: 110 }), "{kind:?}");
+        }
+    }
+
+    /// The longest match at each position by brute force, within `window`.
+    fn brute_longest(data: &[u8], pos: usize, window: usize) -> usize {
+        let max_len = MAX_LEN.min(data.len() - pos);
+        (pos.saturating_sub(window)..pos)
+            .map(|c| match_len(data, c, pos, max_len))
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn binary_tree_finds_the_longest_match() {
+        // With a generous budget the tree search is exact: at every
+        // position, searched or skipped, it must see the longest match.
+        let mut data = Vec::new();
+        let mut s = 7u32;
+        for _ in 0..6000 {
+            s = s.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            // Few distinct symbols, so there are many partial matches.
+            data.push(b"abcab"[(s >> 16) as usize % 5]);
+        }
+        for step in [1, 3] {
+            let mut mf = MatchFinder::new(&data, Kind::BinaryTree, 1000, 10_000, 273);
+            let mut out = Vec::new();
+            for pos in (0..data.len()).step_by(step) {
+                mf.find(pos, &mut out);
+                let found = out.last().map_or(0, |m| m.len as usize);
+                let want = brute_longest(&data, pos, 1000);
+                // Lengths of 1 aren't reported.
+                assert_eq!(
+                    found,
+                    if want < 2 { 0 } else { want },
+                    "pos {pos} step {step}"
+                );
+                if let Some(m) = out.last() {
+                    let d = m.dist as usize;
+                    assert_eq!(
+                        match_len(&data, pos - d, pos, m.len as usize),
+                        m.len as usize
+                    );
+                }
+            }
+        }
     }
 }

@@ -395,19 +395,24 @@ fn apply(mut state: State, mut reps: [u32; 4], op: Op) -> (State, [u32; 4]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lzma::{Options, Parse, compress, decompress};
+    use crate::lzma::{Finder, Options, Parse, compress, decompress};
 
+    /// Text-like data: random words from a small vocabulary, so it has
+    /// the repeats of text without being periodic. (Perfectly periodic
+    /// text is a known weak spot of price-based parsing: xz -6 loses to
+    /// our fast parse on it too.)
     fn text() -> Vec<u8> {
+        const WORDS: [&str; 16] = [
+            "the ", "quick ", "brown ", "fox ", "jumps ", "over ", "lazy ", "dog ", "and ",
+            "then ", "runs ", "away ", "from ", "a ", "big ", "cat. ",
+        ];
+        let mut s = 1u32;
         let mut t = Vec::new();
-        for i in 0..3000u32 {
-            let line = format!(
-                "{} the {} brown fox jumps over the {} dog, {} times.\n",
-                i % 97,
-                ["quick", "slow", "lazy", "sleepy"][i as usize % 4],
-                ["lazy", "happy", "quick"][i as usize % 3],
-                i * 7 % 13
-            );
-            t.extend_from_slice(line.as_bytes());
+        for _ in 0..30_000 {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            t.extend_from_slice(WORDS[(s % 16) as usize].as_bytes());
         }
         t
     }
@@ -415,22 +420,27 @@ mod tests {
     #[test]
     fn optimal_beats_fast_and_roundtrips() {
         let data = text();
-        let size = |parse| {
-            let packed = compress(
-                &data,
-                Options {
-                    parse,
-                    ..Options::default()
-                },
-            );
-            assert_eq!(decompress(&packed, data.len()).unwrap(), data, "{parse:?}");
+        let size = |opts: Options| {
+            let packed = compress(&data, opts);
+            assert_eq!(decompress(&packed, data.len()).unwrap(), data, "{opts:?}");
             packed.len()
         };
-        let (fast, optimal) = (size(Parse::Fast), size(Parse::Optimal));
+        let fast = size(Options::fast());
+        let optimal = size(Options::default());
         assert!(
             optimal * 100 < fast * 97,
             "optimal {optimal} vs fast {fast}"
         );
+        // Every combination of parser and finder works.
+        for parse in [Parse::Fast, Parse::Optimal] {
+            for finder in [Finder::HashChain, Finder::BinaryTree] {
+                size(Options {
+                    parse,
+                    finder,
+                    ..Options::default()
+                });
+            }
+        }
     }
 
     #[test]

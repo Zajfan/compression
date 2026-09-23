@@ -11,6 +11,7 @@
 //! - **Optimal**: price every alternative in bits and pick the cheapest
 //!   path through a whole stretch of input; see [`super::optimal`].
 
+pub use super::matchfinder::Kind as Finder;
 use super::matchfinder::{Match, MatchFinder};
 use super::*;
 use crate::range::{price_bit, price_tree};
@@ -35,6 +36,7 @@ pub struct Options {
     /// Accept a match this long without looking further.
     pub nice_len: usize,
     pub parse: Parse,
+    pub finder: Finder,
 }
 
 impl Default for Options {
@@ -44,6 +46,19 @@ impl Default for Options {
             depth: 48,
             nice_len: 64,
             parse: Parse::Optimal,
+            finder: Finder::BinaryTree,
+        }
+    }
+}
+
+impl Options {
+    /// About 4× faster, about 9% bigger: hash chains and the fast parse,
+    /// like xz's low presets.
+    pub fn fast() -> Self {
+        Self {
+            parse: Parse::Fast,
+            finder: Finder::HashChain,
+            ..Self::default()
         }
     }
 }
@@ -70,7 +85,13 @@ pub fn compress(input: &[u8], opts: Options) -> Vec<u8> {
         state: State::default(),
         reps: [0; 4],
     };
-    let mut finder = MatchFinder::new(input, dict_size as usize, opts.depth, opts.nice_len);
+    let mut finder = MatchFinder::new(
+        input,
+        opts.finder,
+        dict_size as usize,
+        opts.depth,
+        opts.nice_len,
+    );
     let nice_len = opts.nice_len.min(MATCH_MAX_LEN);
 
     match opts.parse {

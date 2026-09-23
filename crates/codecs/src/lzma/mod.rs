@@ -39,7 +39,7 @@ mod optimal;
 mod price;
 
 pub use decode::decompress;
-pub use encode::{Options, Parse, compress};
+pub use encode::{Finder, Options, Parse, compress};
 
 use crate::range::{self, PROB_INIT, Prob};
 
