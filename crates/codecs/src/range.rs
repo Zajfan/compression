@@ -133,6 +133,19 @@ impl Encoder {
         }
     }
 
+    /// Like [`encode_tree`](Self::encode_tree) but least significant bit
+    /// first. LZMA codes the low bits of distances this way.
+    #[inline]
+    pub fn encode_reverse_tree(&mut self, probs: &mut [Prob], bits: u32, mut value: u32) {
+        let mut node = 1;
+        for _ in 0..bits {
+            let bit = value & 1;
+            value >>= 1;
+            self.encode_bit(&mut probs[node], bit);
+            node = (node << 1) | bit as usize;
+        }
+    }
+
     /// Flush the interval and return the stream.
     pub fn finish(mut self) -> Vec<u8> {
         for _ in 0..5 {
@@ -275,6 +288,31 @@ impl<'a> Decoder<'a> {
         (node - (1 << bits)) as u32
     }
 
+    /// Inverse of [`Encoder::encode_reverse_tree`].
+    #[inline]
+    pub fn decode_reverse_tree(&mut self, probs: &mut [Prob], bits: u32) -> u32 {
+        let mut node = 1;
+        let mut value = 0;
+        for i in 0..bits {
+            let bit = self.decode_bit(&mut probs[node]);
+            node = (node << 1) | bit as usize;
+            value |= bit << i;
+        }
+        value
+    }
+
+    /// Bytes of input consumed so far.
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
+    /// True once the decoder has read past the end of the input, which a
+    /// valid stream never does. Lets callers that can't bound their output
+    /// in advance stop on garbage.
+    pub fn overrun(&self) -> bool {
+        self.pos > self.input.len()
+    }
+
     /// Check the stream was used exactly: a valid stream is read to its
     /// last byte and not beyond.
     pub fn finish(self) -> crate::Result<()> {
@@ -287,6 +325,46 @@ impl<'a> Decoder<'a> {
             )),
         }
     }
+}
+
+/// Price (cost in bits) of coding a bit, in units of 1/16 bit.
+pub const PRICE_ONE_BIT: u32 = 16;
+
+/// Estimated cost of coding `bit` with probability `prob`, in 1/16 bits:
+/// `-log2(P(bit))`. Encoders use it to choose between ways of coding the
+/// same data. Precision is kept low (128 buckets) so a table lookup does.
+#[inline]
+pub fn price_bit(prob: Prob, bit: u32) -> u32 {
+    let p = if bit == 0 {
+        u32::from(prob)
+    } else {
+        PROB_ONE - u32::from(prob)
+    };
+    price_table()[(p >> 4) as usize]
+}
+
+/// Price of coding `value` with [`Encoder::encode_tree`].
+pub fn price_tree(probs: &[Prob], bits: u32, value: u32) -> u32 {
+    let mut node = 1;
+    let mut price = 0;
+    for i in (0..bits).rev() {
+        let bit = (value >> i) & 1;
+        price += price_bit(probs[node], bit);
+        node = (node << 1) | bit as usize;
+    }
+    price
+}
+
+fn price_table() -> &'static [u32; 128] {
+    static TABLE: std::sync::OnceLock<[u32; 128]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        std::array::from_fn(|i| {
+            // Middle of the bucket; bucket 0 is clamped to the lowest
+            // probability the adaptive update can reach.
+            let p = ((i as f64 * 16.0 + 8.0).max(31.0)) / f64::from(PROB_ONE);
+            (-p.log2() * f64::from(PRICE_ONE_BIT)).round() as u32
+        })
+    })
 }
 
 #[cfg(test)]
@@ -380,6 +458,27 @@ mod tests {
             assert_eq!(dec.decode_direct(3), 7);
         }
         dec.finish().unwrap();
+    }
+
+    #[test]
+    fn reverse_tree_roundtrip_and_prices() {
+        let mut enc = Encoder::new();
+        let mut probs = [PROB_INIT; 16];
+        for v in 0..500u32 {
+            enc.encode_reverse_tree(&mut probs, 4, v % 16);
+        }
+        let packed = enc.finish();
+        let mut dec = Decoder::new(&packed).unwrap();
+        let mut probs = [PROB_INIT; 16];
+        for v in 0..500u32 {
+            assert_eq!(dec.decode_reverse_tree(&mut probs, 4), v % 16);
+        }
+        dec.finish().unwrap();
+
+        assert_eq!(price_bit(PROB_INIT, 0), PRICE_ONE_BIT);
+        assert_eq!(price_bit(PROB_INIT, 1), PRICE_ONE_BIT);
+        assert!(price_bit(2000, 0) < 2 && price_bit(2000, 1) > 5 * PRICE_ONE_BIT);
+        assert_eq!(price_tree(&[PROB_INIT; 256], 8, 77), 8 * PRICE_ONE_BIT);
     }
 
     #[test]

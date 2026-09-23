@@ -66,6 +66,26 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
+    /// Compress a file to standard .lzma format (readable by xz, 7-Zip, ...)
+    Lzma {
+        input: PathBuf,
+        /// Output path [default: <input>.lzma]
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Overwrite the output if it exists
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Decompress a .lzma file (made by any LZMA tool)
+    Unlzma {
+        input: PathBuf,
+        /// Output path [default: <input> without .lzma]
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Overwrite the output if it exists
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Show the header of a .cmpr file
     Info { input: PathBuf },
     /// List available codecs
@@ -165,6 +185,45 @@ fn main() -> Result<()> {
             };
             let packed = read(&input)?;
             let data = cmpr_codecs::gzip::decompress(&packed, usize::MAX)
+                .with_context(|| format!("decoding {}", input.display()))?;
+            write(&output, &data, force)?;
+            println!(
+                "{} -> {}: {} bytes",
+                input.display(),
+                output.display(),
+                data.len()
+            );
+        }
+        Command::Lzma {
+            input,
+            output,
+            force,
+        } => {
+            let output = output.unwrap_or_else(|| with_added_extension(&input, "lzma"));
+            let data = read(&input)?;
+            let packed = cmpr_codecs::lzma::compress(&data, Default::default());
+            write(&output, &packed, force)?;
+            println!(
+                "{} -> {}: {} -> {} bytes ({})",
+                input.display(),
+                output.display(),
+                data.len(),
+                packed.len(),
+                bench::percent(packed.len(), data.len())
+            );
+        }
+        Command::Unlzma {
+            input,
+            output,
+            force,
+        } => {
+            let output = match output {
+                Some(o) => o,
+                None if input.extension().is_some_and(|e| e == "lzma") => input.with_extension(""),
+                None => bail!("input has no .lzma extension; pass --output"),
+            };
+            let packed = read(&input)?;
+            let data = cmpr_codecs::lzma::decompress(&packed, usize::MAX)
                 .with_context(|| format!("decoding {}", input.display()))?;
             write(&output, &data, force)?;
             println!(

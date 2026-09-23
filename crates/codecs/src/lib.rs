@@ -14,6 +14,7 @@ pub mod frame;
 pub mod gzip;
 pub mod huffman;
 pub mod lz77;
+pub mod lzma;
 pub mod range;
 pub mod stats;
 
@@ -53,6 +54,7 @@ pub fn all_codecs() -> Vec<Box<dyn Codec>> {
         Box::new(codecs::Range0),
         Box::new(codecs::Range1),
         Box::new(codecs::Rans),
+        Box::new(codecs::Lzma),
     ]
 }
 

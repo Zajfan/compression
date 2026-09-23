@@ -11,6 +11,7 @@ repository.workspace = true
 cmpr-testkit.workspace = true
 criterion.workspace = true
 flate2.workspace = true
+liblzma.workspace = true
 proptest.workspace = true
 
 [[bench]]
