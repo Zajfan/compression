@@ -35,9 +35,11 @@
 mod decode;
 mod encode;
 mod matchfinder;
+mod optimal;
+mod price;
 
 pub use decode::decompress;
-pub use encode::{Options, compress};
+pub use encode::{Options, Parse, compress};
 
 use crate::range::{self, PROB_INIT, Prob};
 
@@ -233,11 +235,18 @@ impl Model {
         pos & ((1 << self.props.pb) - 1)
     }
 
-    /// The 0x300 literal probabilities for a byte at `pos` after `prev`.
-    fn literal_probs(&mut self, pos: usize, prev: u8) -> &mut [Prob] {
+    /// Where the 0x300 literal probabilities for a byte at `pos` after
+    /// `prev` start.
+    fn literal_base(&self, pos: usize, prev: u8) -> usize {
         let Props { lc, lp, .. } = self.props;
         let ctx = ((pos & ((1 << lp) - 1)) << lc) + (usize::from(prev) >> (8 - lc));
-        &mut self.literal[0x300 * ctx..0x300 * (ctx + 1)]
+        0x300 * ctx
+    }
+
+    /// The 0x300 literal probabilities for a byte at `pos` after `prev`.
+    fn literal_probs(&mut self, pos: usize, prev: u8) -> &mut [Prob] {
+        let base = self.literal_base(pos, prev);
+        &mut self.literal[base..base + 0x300]
     }
 
     /// Which models the distance slot uses, from `len - 2`.

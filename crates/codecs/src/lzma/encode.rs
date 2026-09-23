@@ -1,15 +1,28 @@
-//! LZMA encoder with a fast, heuristic parse.
+//! LZMA encoder.
 //!
-//! At each position it chooses between a literal, a repeat of one of the
-//! last four distances, or a new match, using rules of thumb from the LZMA
-//! SDK's fast mode (`GetOptimumFast` in `LzmaEnc.c`): repeats are cheap, so
-//! they win unless a new match is clearly longer; a match is skipped when
-//! the next position has a better one (lazy matching). Choosing by exact
-//! bit prices over many positions ("optimal parsing") is roadmap step 10.
+//! Encoding has two halves: *parsing* decides which [`Op`]s describe the
+//! input (literals, repeats of recent distances, new matches), and
+//! [`Encoder`] codes them. Two parsers are available ([`Parse`]):
+//!
+//! - **Fast**: at each position, choose with rules of thumb from the LZMA
+//!   SDK's fast mode (`GetOptimumFast` in `LzmaEnc.c`): repeats are cheap,
+//!   so they win unless a new match is clearly longer; a match is skipped
+//!   when the next position has a better one (lazy matching).
+//! - **Optimal**: price every alternative in bits and pick the cheapest
+//!   path through a whole stretch of input; see [`super::optimal`].
 
 use super::matchfinder::{Match, MatchFinder};
 use super::*;
 use crate::range::{price_bit, price_tree};
+
+/// How the encoder chooses what to code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parse {
+    /// Rules of thumb, one position at a time. About 3× faster.
+    Fast,
+    /// Cheapest path by bit prices over up to 4 KB at a time.
+    Optimal,
+}
 
 /// Encoder settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +34,7 @@ pub struct Options {
     pub depth: usize,
     /// Accept a match this long without looking further.
     pub nice_len: usize,
+    pub parse: Parse,
 }
 
 impl Default for Options {
@@ -29,6 +43,7 @@ impl Default for Options {
             dict_size: 16 << 20,
             depth: 48,
             nice_len: 64,
+            parse: Parse::Optimal,
         }
     }
 }
@@ -58,39 +73,61 @@ pub fn compress(input: &[u8], opts: Options) -> Vec<u8> {
     let mut finder = MatchFinder::new(input, dict_size as usize, opts.depth, opts.nice_len);
     let nice_len = opts.nice_len.min(MATCH_MAX_LEN);
 
+    match opts.parse {
+        Parse::Fast => parse_fast(&mut enc, &mut finder, nice_len),
+        Parse::Optimal => super::optimal::parse(&mut enc, &mut finder, nice_len),
+    }
+    out.extend_from_slice(&enc.rc.finish());
+    out
+}
+
+fn parse_fast(enc: &mut Encoder, finder: &mut MatchFinder, nice_len: usize) {
     let mut matches = Vec::new();
     let mut next_matches = Vec::new();
     // `matches` already holds the search for `pos` from a lazy look-ahead.
     let mut have_matches = false;
     let mut pos = 0;
-    while pos < input.len() {
+    while pos < enc.data.len() {
         if !have_matches {
             finder.find(pos, &mut matches);
         }
         have_matches = false;
-        let choice = enc.choose(pos, &matches, &mut finder, &mut next_matches, nice_len);
-        let len = match choice {
+        let op = match enc.choose(pos, &matches, finder, &mut next_matches, nice_len) {
             Choice::Literal => {
-                enc.literal_or_short_rep(pos);
                 // `choose` always searched pos + 1 before picking a
                 // literal (unless this is the last byte), and it comes next.
                 std::mem::swap(&mut matches, &mut next_matches);
                 have_matches = true;
-                1
+                enc.literal_or_short_rep(pos)
             }
-            Choice::Rep { index, len } => {
-                enc.rep(pos, index, len);
-                len
-            }
-            Choice::Match { dist, len } => {
-                enc.new_match(pos, dist, len);
-                len
-            }
+            Choice::Rep { index, len } => Op::Rep { index, len },
+            Choice::Match { dist, len } => Op::Match { dist, len },
         };
-        pos += len;
+        enc.emit(pos, op);
+        pos += op.len();
     }
-    out.extend_from_slice(&enc.rc.finish());
-    out
+}
+
+/// One coded token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum Op {
+    #[default]
+    Literal,
+    /// One byte from distance `reps[0]`.
+    ShortRep,
+    /// `len` bytes from distance `reps[index]`.
+    Rep { index: usize, len: usize },
+    /// `len` bytes from a new distance (1-based).
+    Match { dist: usize, len: usize },
+}
+
+impl Op {
+    pub(super) fn len(self) -> usize {
+        match self {
+            Op::Literal | Op::ShortRep => 1,
+            Op::Rep { len, .. } | Op::Match { len, .. } => len,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,13 +151,13 @@ fn much_further(small: usize, big: usize) -> bool {
     (big - 1) >> 7 > small - 1
 }
 
-struct Encoder<'a> {
-    data: &'a [u8],
+pub(super) struct Encoder<'a> {
+    pub(super) data: &'a [u8],
     rc: range::Encoder,
-    m: Model,
-    state: State,
+    pub(super) m: Model,
+    pub(super) state: State,
     /// Last four distances, 0-based as coded.
-    reps: [u32; 4],
+    pub(super) reps: [u32; 4],
 }
 
 impl Encoder<'_> {
@@ -237,9 +274,9 @@ impl Encoder<'_> {
         self.m.pos_state(pos)
     }
 
-    /// Code one byte, as a literal or, when the byte at distance rep0 is
+    /// Code one byte as a literal or, when the byte at distance rep0 is
     /// the same and that is cheaper, as a "short rep".
-    fn literal_or_short_rep(&mut self, pos: usize) {
+    fn literal_or_short_rep(&mut self, pos: usize) -> Op {
         let byte = self.data[pos];
         let rep0 = self.reps[0] as usize + 1;
         if rep0 <= pos && self.data[pos - rep0] == byte {
@@ -251,15 +288,30 @@ impl Encoder<'_> {
                 + price_bit(self.m.is_rep0_long[s][ps], 0);
             let literal = price_bit(self.m.is_match[s][ps], 0) + self.literal_price(pos);
             if short_rep < literal {
-                self.rc.encode_bit(&mut self.m.is_match[s][ps], 1);
-                self.rc.encode_bit(&mut self.m.is_rep[s], 1);
-                self.rc.encode_bit(&mut self.m.is_rep_g0[s], 0);
-                self.rc.encode_bit(&mut self.m.is_rep0_long[s][ps], 0);
-                self.state.after_short_rep();
-                return;
+                return Op::ShortRep;
             }
         }
-        self.literal(pos);
+        Op::Literal
+    }
+
+    /// Code `op` at `pos`.
+    pub(super) fn emit(&mut self, pos: usize, op: Op) {
+        match op {
+            Op::Literal => self.literal(pos),
+            Op::ShortRep => self.short_rep(pos),
+            Op::Rep { index, len } => self.rep(pos, index, len),
+            Op::Match { dist, len } => self.new_match(pos, dist, len),
+        }
+    }
+
+    fn short_rep(&mut self, pos: usize) {
+        let s = self.state.index();
+        let ps = self.pos_state(pos);
+        self.rc.encode_bit(&mut self.m.is_match[s][ps], 1);
+        self.rc.encode_bit(&mut self.m.is_rep[s], 1);
+        self.rc.encode_bit(&mut self.m.is_rep_g0[s], 0);
+        self.rc.encode_bit(&mut self.m.is_rep0_long[s][ps], 0);
+        self.state.after_short_rep();
     }
 
     fn prev_byte(&self, pos: usize) -> u8 {

@@ -355,6 +355,19 @@ pub fn price_tree(probs: &[Prob], bits: u32, value: u32) -> u32 {
     price
 }
 
+/// Price of coding `value` with [`Encoder::encode_reverse_tree`].
+pub fn price_reverse_tree(probs: &[Prob], bits: u32, mut value: u32) -> u32 {
+    let mut node = 1;
+    let mut price = 0;
+    for _ in 0..bits {
+        let bit = value & 1;
+        value >>= 1;
+        price += price_bit(probs[node], bit);
+        node = (node << 1) | bit as usize;
+    }
+    price
+}
+
 fn price_table() -> &'static [u32; 128] {
     static TABLE: std::sync::OnceLock<[u32; 128]> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {

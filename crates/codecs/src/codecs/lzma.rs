@@ -1,7 +1,7 @@
 use crate::lzma::{Options, compress, decompress};
 use crate::{Codec, Error, Result};
 
-/// LZMA in the `.lzma` format, 16 MB dictionary, fast (heuristic) parse.
+/// LZMA in the `.lzma` format, 16 MB dictionary, optimal parse.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Lzma;
 

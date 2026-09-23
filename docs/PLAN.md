@@ -121,7 +121,7 @@ Each phase ends with something that works and a benchmark.
 7. ✅ rANS: static order-0, 4 interleaved states, branchless 16-bit renormalization, 32K blocks (`rans`). tANS/FSE variant later if LZ needs it
 8. ✅ LZMA: `.lzma` format, 16 MB window, hash-chain finder, SDK-style fast parse; verified both ways against liblzma and the real `xz` tool (`lzma` codec, `cmpr lzma`/`unlzma`)
 9. Burrows–Wheeler transform + MTF (bzip2-style)
-10. Optimal parsing (smarter match selection)
+10. ✅ Optimal parsing for LZMA: price-based shortest path over up to 4 KB, with the SDK's combined literal+rep0 edges (Silesia 26.2% → 24.0%; `xz -6` 23.2%). Next for LZMA: a binary-tree match finder (BT4), which is both where the time goes and the rest of the gap
 
 ### Phase 3 — Our format + smart routing
 11. Container format v1 (see section 3)

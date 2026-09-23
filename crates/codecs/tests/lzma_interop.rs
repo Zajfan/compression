@@ -3,7 +3,7 @@
 //! decode what it writes, including other lc/lp/pb settings and its
 //! end-marker streams.
 
-use cmpr_codecs::lzma::{Options, compress, decompress};
+use cmpr_codecs::lzma::{Options, Parse, compress, decompress};
 use cmpr_testkit::{arb_data, standard_inputs};
 use liblzma::read::XzDecoder;
 use liblzma::stream::{LzmaOptions, Stream};
@@ -30,8 +30,21 @@ fn reference_encode(data: &[u8], opts: &LzmaOptions) -> Vec<u8> {
 }
 
 fn check_both_ways(data: &[u8]) -> Result<(), TestCaseError> {
-    let ours = compress(data, Options::default());
-    prop_assert_eq!(reference_decode(&ours), data, "liblzma decoding ours");
+    for parse in [Parse::Optimal, Parse::Fast] {
+        let ours = compress(
+            data,
+            Options {
+                parse,
+                ..Options::default()
+            },
+        );
+        prop_assert_eq!(
+            reference_decode(&ours),
+            data,
+            "liblzma decoding ours ({:?})",
+            parse
+        );
+    }
     let theirs = reference_encode(data, &LzmaOptions::new_preset(6).unwrap());
     let decoded =
         decompress(&theirs, usize::MAX).map_err(|e| TestCaseError::fail(e.to_string()))?;
