@@ -106,9 +106,7 @@ impl<'a> MatchFinder<'a> {
     }
 
     fn key3(&self, pos: usize) -> usize {
-        let d = self.data;
-        let v = u32::from(d[pos]) | u32::from(d[pos + 1]) << 8 | u32::from(d[pos + 2]) << 16;
-        (v.wrapping_mul(0x9E37_79B1) >> (32 - HASH3_BITS)) as usize
+        hash3(&self.data[pos..pos + 3])
     }
 
     fn key4(&self, pos: usize) -> usize {
@@ -268,7 +266,8 @@ impl<'a> MatchFinder<'a> {
                 }
                 let c = c as usize - 1;
                 let dist = pos - c;
-                if dist <= self.window && data[c + best] == data[pos + best] {
+                // `best < max_len` also keeps `pos + best` inside the data.
+                if dist <= self.window && best < max_len && data[c + best] == data[pos + best] {
                     let len = match_len(data, c, pos, max_len);
                     if len > best {
                         best = len;
@@ -349,6 +348,11 @@ impl<'a> MatchFinder<'a> {
     }
 }
 
+fn hash3(b: &[u8]) -> usize {
+    let v = u32::from(b[0]) | u32::from(b[1]) << 8 | u32::from(b[2]) << 16;
+    (v.wrapping_mul(0x9E37_79B1) >> (32 - HASH3_BITS)) as usize
+}
+
 /// How many bytes at `a` and `b` agree, up to `limit`. Needs `a < b` and
 /// `b + limit <= data.len()`.
 fn match_len(data: &[u8], a: usize, b: usize, limit: usize) -> usize {
@@ -410,6 +414,26 @@ mod tests {
             assert!(out.is_empty(), "{kind:?} {out:?}");
             MatchFinder::new(&data, kind, 128, 16, 273).find(110, &mut out);
             assert_eq!(out.last(), Some(&Match { len: 10, dist: 110 }), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn full_length_short_match_then_hash3_collision() {
+        // At the last 3 bytes, the 2-byte head finds "abc" matching to the
+        // end of the data, and the 3-byte head points at a different string
+        // with the same hash. Checking that second candidate must not read
+        // past the end. (Found by the random round-trip test on Windows.)
+        let collider = (0..1u32 << 24)
+            .map(|v| v.to_le_bytes())
+            .find(|b| &b[..3] != b"abc" && &b[..2] != b"ab" && hash3(&b[..3]) == hash3(b"abc"))
+            .expect("a 3-byte string colliding with \"abc\"");
+        let mut data = b"abc".to_vec();
+        data.extend_from_slice(&collider[..3]);
+        data.extend_from_slice(b"abc");
+        for kind in KINDS {
+            let mut out = Vec::new();
+            MatchFinder::new(&data, kind, 1 << 20, 16, 273).find(6, &mut out);
+            assert_eq!(out, [Match { len: 3, dist: 6 }], "{kind:?}");
         }
     }
 
