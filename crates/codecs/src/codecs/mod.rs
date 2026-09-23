@@ -1,5 +1,6 @@
 //! One module per algorithm. Register new codecs in [`crate::all_codecs`].
 
+mod bwt;
 mod deflate;
 mod huffman;
 mod lzma;
@@ -10,6 +11,7 @@ mod rans;
 mod rle;
 mod store;
 
+pub use bwt::Bwt;
 pub use deflate::Deflate;
 pub use huffman::Huffman;
 pub use lzma::Lzma;

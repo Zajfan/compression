@@ -120,7 +120,7 @@ Each phase ends with something that works and a benchmark.
 6. ✅ Range coder: LZMA-style binary adaptive coder, order-0 and order-1 byte models (`range0`, `range1`); `cmpr entropy` shows order-1 limits
 7. ✅ rANS: static order-0, 4 interleaved states, branchless 16-bit renormalization, 32K blocks (`rans`). tANS/FSE variant later if LZ needs it
 8. ✅ LZMA: `.lzma` format, 16 MB window, hash-chain finder, SDK-style fast parse; verified both ways against liblzma and the real `xz` tool (`lzma` codec, `cmpr lzma`/`unlzma`)
-9. Burrows–Wheeler transform + MTF (bzip2-style)
+9. ✅ Burrows-Wheeler transform + move-to-front + rANS (bzip2-style pipeline, not the `.bz2` file format): rotation-doubling suffix sort (O(n log n)), LF-mapping inverse, 900K blocks (`bwt` codec). Silesia 27.6% against real `bzip2 -9`'s 25.7%; compression is the slow side (~4 MB/s) since the sort is O(n log n) — a linear-time construction (SA-IS) is the natural next speedup, not yet done
 10. ✅ Optimal parsing for LZMA: price-based shortest path over up to 4 KB, with the SDK's combined literal+rep0 edges, fed by a binary-tree (BT4) match finder. On par with `xz -6` on Silesia (see README scoreboard); `Options::fast()` keeps hash chains + heuristic parse
 
 ### Phase 3 — Our format + smart routing

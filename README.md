@@ -2,7 +2,7 @@
 
 An open-source, cross-platform file archiver built from scratch in Rust. The goals are to learn how compression works, and to push compression ratio by using a specialised method for each file type.
 
-Status: **Phase 1 done**: RLE, Huffman, LZ77 and a zlib-compatible Deflate/gzip, all from scratch. **Phase 2 in progress**: adaptive range coding, rANS, and an xz-compatible LZMA that beats `xz -6` on Silesia. BWT next. See [docs/PLAN.md](docs/PLAN.md) for the tech stack, architecture and roadmap.
+Status: **Phase 1 done**: RLE, Huffman, LZ77 and a zlib-compatible Deflate/gzip, all from scratch. **Phase 2 in progress**: adaptive range coding, rANS, an xz-compatible LZMA that beats `xz -6` on Silesia, and a bzip2-style BWT pipeline. Next: linear-time suffix sorting, then ANS-coded LZ (LZFSE/zstd-style). See [docs/PLAN.md](docs/PLAN.md) for the tech stack, architecture and roadmap.
 
 > `cmpr` is a placeholder name until the project gets a real one.
 
@@ -50,10 +50,12 @@ cargo bench -p cmpr-codecs                                 # detailed speed (cri
 | `range1` | 42.9% | 36 MB/s | 42 MB/s | Previous byte as context |
 | `deflate` | 32.1% | 31 MB/s | 320 MB/s | LZ77 + Huffman (zip, gzip, png) |
 | real `gzip -6` | 32.2% | | | |
+| **`bwt`** | **27.6%** | 3.7 MB/s | 30 MB/s | Sort rotations, then MTF + run-length + rANS (bzip2's pipeline) |
+| real `bzip2 -9` | 25.7% | | | |
 | real `xz -6` | 23.2% | ~3 MB/s | | |
 | **`lzma`** | **23.1%** | 2.1 MB/s | 70 MB/s | Big window, context models, optimal parse (7-Zip, xz) |
 
-`deflate` and `lzma` produce standard streams: `cmpr gzip` and `cmpr lzma` files open in gzip, xz and 7-Zip, and CI checks that both ways.
+`deflate` and `lzma` produce standard streams: `cmpr gzip` and `cmpr lzma` files open in gzip, xz and 7-Zip, and CI checks that both ways. `bwt` is our own stream, not the `.bz2` format — see [`crate::bwt`](crates/codecs/src/bwt/mod.rs) for why.
 
 ## Adding a codec
 

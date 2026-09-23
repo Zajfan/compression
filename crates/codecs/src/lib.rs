@@ -6,6 +6,7 @@
 
 pub mod ans;
 pub mod bits;
+pub mod bwt;
 pub mod codecs;
 pub mod crc32;
 pub mod deflate;
@@ -55,6 +56,7 @@ pub fn all_codecs() -> Vec<Box<dyn Codec>> {
         Box::new(codecs::Range1),
         Box::new(codecs::Rans),
         Box::new(codecs::Lzma),
+        Box::new(codecs::Bwt),
     ]
 }
 
