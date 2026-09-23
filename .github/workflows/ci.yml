@@ -62,3 +62,17 @@ jobs:
             $BIN gunzip -f -o t.out ref.gz
             cmp t.out "$f"
           done
+      - name: lzma interop
+        shell: bash
+        run: |
+          if ! command -v xz >/dev/null; then echo "xz not installed, skipping"; exit 0; fi
+          BIN=target/release/cmpr
+          for f in Cargo.lock README.md docs/PLAN.md; do
+            # ours -> real xz
+            $BIN lzma -f -o t.lzma "$f"
+            xz --format=lzma -dc t.lzma | cmp - "$f"
+            # real xz -> ours
+            xz --format=lzma -9c "$f" > ref.lzma
+            $BIN unlzma -f -o t.out ref.lzma
+            cmp t.out "$f"
+          done
